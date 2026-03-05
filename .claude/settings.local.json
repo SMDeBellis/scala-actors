@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sbt test:*)",
+      "Bash(git init:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(sbt compile:*)",
+      "Read(//home/sdmachine/scala-actors-2/**)",
+      "Bash(sbt \"runMain actors.examples.ExamplesMain\")"
+    ]
+  }
+}
