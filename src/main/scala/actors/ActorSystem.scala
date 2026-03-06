@@ -2,6 +2,7 @@ package actors
 
 import java.util.concurrent.{Executors, ScheduledExecutorService, ConcurrentHashMap, ExecutorService}
 import scala.concurrent.duration.Duration
+import scala.jdk.CollectionConverters._
 import actors.exceptions.{ActorNotFoundException, ActorStartException}
 
 import java.util.concurrent.TimeUnit as JavaTimeUnit
@@ -49,15 +50,37 @@ case class ActorSettings(
 class ActorSystem(val name: String) extends AutoCloseable {
 
   private val actors = new ConcurrentHashMap[ActorPath, ActorRef]()
+  private val children = new ConcurrentHashMap[ActorPath, java.util.List[ActorRef]]()
   private val scheduler: ScheduledExecutorService = Executors.newScheduledThreadPool(4)
   private var isShutdown = false
 
+  // Create /user guardian - root for all user-level actors
+  private val userPath = ActorPath(name, "user")
+  private val userGuardian = ActorRef(userPath, null, this, None)
+  actors.put(userPath, userGuardian)
+
   /**
-   * Create an actor with the given props at the root level
+   * Create an actor with the given props at the root level (child of /user)
    */
   def actorOf(props: Props, name: String): ActorRef = {
-    val path = ActorPath(name, name)
+    // Actors created at root level become children of /user
+    val path = ActorPath(this.name, s"user/$name")
     createActor(props, path)
+  }
+
+  /**
+   * Create a child actor under a parent path
+   */
+  def actorOf(parentPath: ActorPath, props: Props, name: String): ActorRef = {
+    val childPath = parentPath.child(name)
+    createActor(props, childPath)
+  }
+
+  /**
+   * Create a child actor under a parent ActorRef
+   */
+  def actorOf(parentRef: ActorRef, props: Props, name: String): ActorRef = {
+    actorOf(parentRef.path, props, name)
   }
 
   /**
@@ -79,8 +102,11 @@ class ActorSystem(val name: String) extends AutoCloseable {
       // Create mailbox
       val mailbox = new Mailbox(props.mailboxConfig)
 
-      // Create actor ref
-      val actorRef = ActorRef(path, mailbox, this)
+      // Get parent reference
+      val parentRef = path.parent.flatMap(p => Option(actors.get(p)))
+
+      // Create actor ref WITH parent reference
+      val actorRef = ActorRef(path, mailbox, this, parentRef)
 
       // Initialize actor
       actor.self = actorRef
@@ -89,6 +115,9 @@ class ActorSystem(val name: String) extends AutoCloseable {
 
       // Register actor
       actors.put(path, actorRef)
+
+      // Register with parent
+      path.parent.foreach(parentPath => addChild(parentPath, actorRef))
 
       // Start actor in a Java virtual thread (Java 21+)
       Thread.startVirtualThread(new Runnable {
@@ -108,15 +137,47 @@ class ActorSystem(val name: String) extends AutoCloseable {
     }
   }
 
+  // Get all children of an actor, empty list if none
+  private def getChildren(path: ActorPath): List[ActorRef] = {
+    Option(children.get(path)).map(_.asScala.toList).getOrElse(Nil)
+  }
+
+  // Add child to parent's children list
+  private def addChild(parentPath: ActorPath, childRef: ActorRef): Unit = {
+    val parentChildren = Option(children.get(parentPath))
+      .getOrElse {
+        val list = new java.util.ArrayList[ActorRef]()
+        children.put(parentPath, list)
+        list
+      }
+    parentChildren.add(childRef)
+  }
+
+  // Remove child from parent's children list
+  private def removeChild(parentPath: ActorPath, childRef: ActorRef): Unit = {
+    Option(children.get(parentPath)).foreach(_.remove(childRef))
+  }
+
   /**
-   * Stop an actor gracefully
+   * Stop an actor gracefully (cascades to children first)
    */
   def stop(ref: ActorRef): Unit = {
-    // Send shutdown message
+    // Recursively stop all children first
+    val childRefs = getChildren(ref.path)
+    childRefs.foreach { child =>
+      stop(child)
+    }
+
+    // Then stop this actor
     ref ! Shutdown
 
     // Wait for actor to stop (simplified - could use future/promise)
     Thread.sleep(100)
+
+    // Remove from parent's children list
+    ref.parent.foreach { p =>
+      removeChild(p.path, ref)
+    }
 
     // Cleanup
     actors.remove(ref.path)
@@ -128,6 +189,14 @@ class ActorSystem(val name: String) extends AutoCloseable {
   def selector(path: String): Option[ActorRef] = {
     val actorPath = ActorPath(name, path)
     Option(actors.get(actorPath))
+  }
+
+  // Get children of an actor (public API)
+  def children(ref: ActorRef): List[ActorRef] = getChildren(ref.path)
+
+  // Check if actor has children
+  def hasChildren(path: ActorPath): Boolean = {
+    Option(children.get(path)).map(!_.isEmpty).getOrElse(false)
   }
 
   /**
@@ -169,14 +238,13 @@ class ActorSystem(val name: String) extends AutoCloseable {
     if (isShutdown) return
     isShutdown = true
 
-    // Stop all actors
-    actors.values().forEach((ref: ActorRef) => {
-      try {
-        ref ! Shutdown
-      } catch {
-        case _: Exception =>
-      }
-    })
+    // Get root-level actors (children of /user)
+    val rootActors = getChildren(userPath)
+
+    // Stop root actors (will cascade to all children)
+    rootActors.foreach { ref =>
+      try { stop(ref) } catch { case _: Exception => }
+    }
 
     // Wait for actors to finish
     Thread.sleep(500)
@@ -185,8 +253,9 @@ class ActorSystem(val name: String) extends AutoCloseable {
     scheduler.shutdown()
     scheduler.awaitTermination(10, JavaTimeUnit.SECONDS)
 
-    // Clear actors map
+    // Clear actors map and children map
     actors.clear()
+    children.clear()
   }
 
   override def close(): Unit = shutdown()

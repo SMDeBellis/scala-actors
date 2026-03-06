@@ -10,7 +10,8 @@ import actors.exceptions.{ActorNotFoundException, DeadLetterException}
 class ActorRef private (
   val path: ActorPath,
   private val mailbox: Mailbox,
-  private val system: ActorSystem
+  private val system: ActorSystem,
+  val parent: Option[ActorRef] = None  // Parent reference for hierarchy
 ) extends Equals {
 
   /**
@@ -93,6 +94,10 @@ class ActorRef private (
 object ActorRef {
   def apply(path: ActorPath, mailbox: Mailbox, system: ActorSystem): ActorRef = {
     new ActorRef(path, mailbox, system)
+  }
+
+  def apply(path: ActorPath, mailbox: Mailbox, system: ActorSystem, parent: Option[ActorRef]): ActorRef = {
+    new ActorRef(path, mailbox, system, parent)
   }
 
   /**

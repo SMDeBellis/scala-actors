@@ -19,8 +19,15 @@ class ActorContext(
    * Get or create a child actor
    */
   def actorOf(props: Props, name: String): ActorRef = {
-    // For now, create at root level with unique name
-    system.actorOf(props, s"${self.path.name}/$name")
+    // Create child at proper hierarchical path using parent ref
+    system.actorOf(self, props, name)
+  }
+
+  /**
+   * Get all child actors
+   */
+  def children(): List[ActorRef] = {
+    system.children(self)
   }
 
   /**
