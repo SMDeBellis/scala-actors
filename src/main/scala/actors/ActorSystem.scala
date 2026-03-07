@@ -209,12 +209,35 @@ class ActorSystem(val name: String) extends AutoCloseable {
   }
 
   /**
-   * Schedule a task for execution at a specific time
+   * Schedule a task for execution at a specific time (absolute time, defaults to milliseconds)
    */
   def scheduleAt(time: Long, unit: TimeUnit, task: () => Unit): Unit = {
-    scheduler.schedule(new Runnable {
-      def run(): Unit = task()
-    }, time, unit.toJava)
+    // Convert time to milliseconds for consistent handling
+    val targetTimeMs = unit match {
+      case TimeUnit.NANOSECONDS => time / 1000000L
+      case TimeUnit.MICROSECONDS => time / 1000L
+      case TimeUnit.MILLISECONDS => time
+      case TimeUnit.SECONDS => time * 1000L
+      case TimeUnit.MINUTES => time * 60000L
+      case TimeUnit.HOURS => time * 3600000L
+      case TimeUnit.DAYS => time * 86400000L
+    }
+
+    // Calculate delay from current time to target time
+    val currentTimeMs = System.currentTimeMillis()
+    val delayMs = targetTimeMs - currentTimeMs
+
+    if (delayMs > 0) {
+      // Schedule with positive delay
+      scheduler.schedule(new Runnable {
+        def run(): Unit = task()
+      }, delayMs, JavaTimeUnit.MILLISECONDS)
+    } else {
+      // Time has already passed, execute immediately
+      new Thread(new Runnable {
+        def run(): Unit = task()
+      }).start()
+    }
   }
 
   /**
