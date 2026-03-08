@@ -125,5 +125,40 @@ class ActorHierarchySpec extends AnyFunSpec with Matchers {
       system.selector("/user/actor") should be(empty)
       system.shutdown()
     }
+
+    it("should use hasChildren to check for children") {
+      val system = ActorSystem("test")
+
+      // Actor with no children
+      val lonelyActor = system.actorOf(Props(() => new Actor {
+        def receive = { case _ => }
+      }), "lonely")
+
+      val lonelyPath = ActorPath("test", "user/lonely")
+      system.hasChildren(lonelyPath) shouldBe false
+
+      // Actor with children
+      val parentActor = system.actorOf(Props(() => new Actor {
+        def receive = { case _ => }
+      }), "parent-with-children")
+
+      system.actorOf(parentActor, Props(() => new Actor {
+        def receive = { case _ => }
+      }), "child1")
+
+      val parentPath = ActorPath("test", "user/parent-with-children")
+      system.hasChildren(parentPath) shouldBe true
+
+      system.shutdown()
+    }
+
+    it("should support hasChildren with non-existent actor") {
+      val system = ActorSystem("test")
+      val nonExistentPath = ActorPath("test", "user/nonexistent")
+
+      system.hasChildren(nonExistentPath) shouldBe false
+
+      system.shutdown()
+    }
   }
 }

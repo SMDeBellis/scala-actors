@@ -77,6 +77,43 @@ class ActorContextSpec extends AnyFunSpec with Matchers {
       testSystem.shutdown()
     }
 
+    it("should call context.children() from within actor") {
+      val testSystem = new ActorSystem("test-context-children-call")
+      var childCount = 0
+      var childNames = List.empty[String]
+
+      class ParentActor extends Actor {
+        override def preStart(): Unit = {
+          context.actorOf(Props(() => new Actor {
+            override def receive = { case _ => }
+          }), "child-a")
+          context.actorOf(Props(() => new Actor {
+            override def receive = { case _ => }
+          }), "child-b")
+        }
+
+        override def receive: Receive = {
+          case "get-children" =>
+            val children = context.children()
+            childCount = children.size
+            childNames = children.map(_.path.name).sorted
+          case _ =>
+        }
+      }
+
+      val parent = testSystem.actorOf(Props(() => new ParentActor), "parent")
+      Thread.sleep(200)
+
+      // Request children info from within the actor
+      parent ! "get-children"
+      Thread.sleep(100)
+
+      childCount shouldBe 2
+      childNames shouldBe List("child-a", "child-b")
+
+      testSystem.shutdown()
+    }
+
     it("should stop actors via context.stop()") {
       val testSystem = new ActorSystem("test-stop")
 
